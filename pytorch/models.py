@@ -126,7 +126,7 @@ class AcousticModelCRnn8Dropout(nn.Module):
         init_gru(self.gru)
         init_layer(self.fc)
 
-    def forward(self, input):
+    def forward(self, input, hidden_state=None):
         """
         Args:
           input: (batch_size, channels_num, time_steps, freq_bins)
@@ -148,10 +148,10 @@ class AcousticModelCRnn8Dropout(nn.Module):
         x = F.relu(self.bn5(self.fc5(x).transpose(1, 2)).transpose(1, 2))
         x = F.dropout(x, p=0.5, training=self.training, inplace=True)
         
-        (x, _) = self.gru(x)
+        (x, hidden_state) = self.gru(x, hidden_state)
         x = F.dropout(x, p=0.5, training=self.training, inplace=False)
         output = torch.sigmoid(self.fc(x))
-        return output
+        return output, hidden_state
 
 
 class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
@@ -209,10 +209,16 @@ class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
         init_layer(self.reg_onset_fc)
         init_layer(self.frame_fc)
  
-    def forward(self, input):
+    def forward(self, input, hidden_state={}):
         """
         Args:
           input: (batch_size, data_length)
+          hidden_state: dict, {
+            'frame_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_onset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_offset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'velocity_state': (num_layers * num_directions, batch_size, hidden_size),
+          }
 
         Outputs:
           output_dict: dict, {
@@ -220,6 +226,12 @@ class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
             'reg_offset_output': (batch_size, time_steps, classes_num),
             'frame_output': (batch_size, time_steps, classes_num),
             'velocity_output': (batch_size, time_steps, classes_num)
+          },
+          hidden_state: dict, {
+            'frame_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_onset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_offset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'velocity_state': (num_layers * num_directions, batch_size, hidden_size),
           }
         """
 
@@ -230,10 +242,10 @@ class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
         x = self.bn0(x)
         x = x.transpose(1, 3)
 
-        frame_output = self.frame_model(x)  # (batch_size, time_steps, classes_num)
-        reg_onset_output = self.reg_onset_model(x)  # (batch_size, time_steps, classes_num)
-        reg_offset_output = self.reg_offset_model(x)    # (batch_size, time_steps, classes_num)
-        velocity_output = self.velocity_model(x)    # (batch_size, time_steps, classes_num)
+        frame_output, hidden_state['frame_state'] = self.frame_model(x, hidden_state.get('frame_state'))  # (batch_size, time_steps, classes_num)
+        reg_onset_output, hidden_state['reg_onset_state'] = self.reg_onset_model(x, hidden_state.get('reg_onset_state'))  # (batch_size, time_steps, classes_num)
+        reg_offset_output, hidden_state['reg_offset_state'] = self.reg_offset_model(x, hidden_state.get('reg_offset_state'))  # (batch_size, time_steps, classes_num)
+        velocity_output, hidden_state['velocity_state'] = self.velocity_model(x, hidden_state.get('velocity_state'))  # (batch_size, time_steps, classes_num)
  
         # Use velocities to condition onset regression
         x = torch.cat((reg_onset_output, (reg_onset_output ** 0.5) * velocity_output.detach()), dim=2)
@@ -255,7 +267,7 @@ class Regress_onset_offset_frame_velocity_CRNN(nn.Module):
             'frame_output': frame_output, 
             'velocity_output': velocity_output}
 
-        return output_dict
+        return output_dict, hidden_state
 
 
 class Regress_pedal_CRNN(nn.Module):
@@ -300,17 +312,26 @@ class Regress_pedal_CRNN(nn.Module):
     def init_weight(self):
         init_bn(self.bn0)
         
-    def forward(self, input):
+    def forward(self, input, hidden_state={}):
         """
         Args:
           input: (batch_size, data_length)
+          hidden_state: dict, {
+            'reg_pedal_onset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_pedal_offset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_pedal_frame_state': (num_layers * num_directions, batch_size, hidden_size),
+          }
 
         Outputs:
           output_dict: dict, {
-            'reg_onset_output': (batch_size, time_steps, classes_num),
-            'reg_offset_output': (batch_size, time_steps, classes_num),
-            'frame_output': (batch_size, time_steps, classes_num),
-            'velocity_output': (batch_size, time_steps, classes_num)
+            'reg_pedal_onset_output': (batch_size, time_steps, classes_num),
+            'reg_pedal_offset_output': (batch_size, time_steps, classes_num),
+            'pedal_frame_output': (batch_size, time_steps, classes_num)
+          },
+          hidden_state: dict, {
+            'reg_pedal_onset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_pedal_offset_state': (num_layers * num_directions, batch_size, hidden_size),
+            'reg_pedal_frame_state': (num_layers * num_directions, batch_size, hidden_size),
           }
         """
 
@@ -321,16 +342,16 @@ class Regress_pedal_CRNN(nn.Module):
         x = self.bn0(x)
         x = x.transpose(1, 3)
 
-        reg_pedal_onset_output = self.reg_pedal_onset_model(x)  # (batch_size, time_steps, classes_num)
-        reg_pedal_offset_output = self.reg_pedal_offset_model(x)  # (batch_size, time_steps, classes_num)
-        pedal_frame_output = self.reg_pedal_frame_model(x)  # (batch_size, time_steps, classes_num)
+        reg_pedal_onset_output, hidden_state['reg_pedal_onset_state'] = self.reg_pedal_onset_model(x, hidden_state.get('reg_pedal_onset_state'))  # (batch_size, time_steps, classes_num)
+        reg_pedal_offset_output, hidden_state['reg_pedal_offset_state'] = self.reg_pedal_offset_model(x, hidden_state.get('reg_pedal_offset_state'))  # (batch_size, time_steps, classes_num)
+        pedal_frame_output, hidden_state['reg_pedal_frame_state'] = self.reg_pedal_frame_model(x, hidden_state.get('reg_pedal_frame_state'))  # (batch_size, time_steps, classes_num)
         
         output_dict = {
             'reg_pedal_onset_output': reg_pedal_onset_output, 
             'reg_pedal_offset_output': reg_pedal_offset_output,
             'pedal_frame_output': pedal_frame_output}
 
-        return output_dict
+        return output_dict, hidden_state
 
 
 # This model is not trained, but is combined from the trained note and pedal models.
@@ -347,11 +368,17 @@ class Note_pedal(nn.Module):
         self.note_model.load_state_dict(m['note_model'], strict=strict)
         self.pedal_model.load_state_dict(m['pedal_model'], strict=strict)
 
-    def forward(self, input):
-        note_output_dict = self.note_model(input)
-        pedal_output_dict = self.pedal_model(input)
+    def forward(self, input, combined_hidden_state):
+        note_output_dict, note_hidden_state = self.note_model(input, combined_hidden_state.get('note_hidden_state'))
+        pedal_output_dict, pedal_hidden_state = self.pedal_model(input, combined_hidden_state.get('pedal_hidden_state'))
 
         full_output_dict = {}
         full_output_dict.update(note_output_dict)
         full_output_dict.update(pedal_output_dict)
-        return full_output_dict
+
+        hidden_states = {
+            'note_hidden_state': note_hidden_state,
+            'pedal_hidden_state': pedal_hidden_state
+        }
+
+        return full_output_dict, hidden_states
